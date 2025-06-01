@@ -104,7 +104,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Header
-st.title("🎯 Lead Generation AI with Groq")
+st.title("🎯 Lead Generation AI ")
 st.markdown("""Generate detailed, relevant leads with AI-powered search and verification.  
 *Powered by Groq's advanced language models*""")
 
