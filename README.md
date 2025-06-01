@@ -1,6 +1,5 @@
 # LeadGEnerationwithAI
 
-Lead Generation AI with Groq
 
 A powerful lead generation application that leverages Groq's advanced language models to find and validate potential business leads, complete with a modern Streamlit interface for easy interaction.
 
