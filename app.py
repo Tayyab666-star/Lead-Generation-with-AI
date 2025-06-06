@@ -1,168 +1,147 @@
 import streamlit as st
 import os
-from dotenv import load_dotenv
-import requests
+import pandas as pd
 import json
+from datetime import datetime
+from typing import List, Dict, Any
+from groq import Groq
 
-load_dotenv()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# Set page configuration
+st.set_page_config(page_title="Lead Generation AI", page_icon="💼", layout="wide")
 
-def get_leads(query: str):
-    api_url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {GROQ_API_KEY}"
-    }
-    system_prompt = """You are a lead generation assistant. For each query:
-    1. Provide numbered leads (1., 2., etc.)
-    2. Include detailed information for each lead:
-       - Full name and position
-       - Company name and location
-       - Contact information (email, LinkedIn)
-       - Brief description of relevance
-    3. Add source information when available (LinkedIn, company website, etc.)
-    4. For LinkedIn profiles:
-       - Only provide profiles that are currently active and accessible
-       - Include the complete LinkedIn URL (e.g., https://www.linkedin.com/in/username)
-       - Verify the profile matches the person's current role and company
-    Format the response in a clean, readable way.
-    
-    IMPORTANT: Double-check all LinkedIn URLs to ensure they are valid and accessible before including them."""
-    data = {
-        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query}
-        ]
-    }
+# Initialize session state
+if 'GROQ_API_KEY' not in st.session_state:
+    st.session_state.GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+
+if 'leads' not in st.session_state:
+    st.session_state.leads = []
+
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
+
+# Reusable Groq client setup
+@st.cache_resource
+def get_groq_client(api_key: str):
     try:
-        response = requests.post(api_url, headers=headers, json=data)
-        if response.status_code == 200:
-            result = response.json().get("choices", [])[0].get("message", {})
-            return [{"result": result.get("content", "No leads found.")}]
-        else:
-            return [{"error": f"Groq API error: {response.status_code}"}]
+        return Groq(api_key=api_key)
     except Exception as e:
-        return [{"error": str(e)}]
+        st.error(f"Failed to initialize Groq client: {e}")
+        return None
 
-def call_groq_chat_completion(user_message: str):
-    api_url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {GROQ_API_KEY}"
-    }
-    system_message = """You are a specialized lead generation and business development assistant. Focus only on:
-    1. Lead generation strategies and insights
-    2. Marketing email templates and campaigns
-    3. Business development tactics
-    4. Sales outreach methods
-    5. Lead qualification and scoring
-    6. Market research and competitor analysis
-    7. Analyzing and explaining previously generated leads
-    
-    If the query is outside these topics, politely explain that you can only assist with lead generation and business development related questions.
-    Always provide practical, actionable advice with examples when possible."""
-    
-    data = {
-        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
-        "messages": [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message}
-        ]
-    }
+# Groq API call
+def get_groq_response(client, messages: List[Dict[str, str]]) -> str:
     try:
-        response = requests.post(api_url, headers=headers, json=data)
-        if response.status_code == 200:
-            return response.json().get("choices", [])[0].get("message", {})
-        else:
-            return {"error": f"Groq API error: {response.status_code}"}
+        response = client.chat.completions.create(
+            model="llama3-70b-8192",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1024,
+        )
+        return response.choices[0].message.content
     except Exception as e:
-        return {"error": str(e)}
+        st.error(f"Error fetching Groq response: {e}")
+        return "I'm sorry, I'm having trouble connecting right now. Please try again later."
 
-# Set page config
-st.set_page_config(page_title="Lead Generation AI", layout="wide")
+# Extract and save lead data
 
-# Custom CSS
-st.markdown("""
-<style>
-.stApp {
-    max-width: 1200px;
-    margin: 0 auto;
-}
-.lead-container {
-    background-color: #f0f2f6;
-    border-radius: 10px;
-    padding: 20px;
-    margin: 10px 0;
-}
-.source-info {
-    color: #666;
-    font-size: 0.9em;
-    font-style: italic;
-}
-</style>
-""", unsafe_allow_html=True)
+def extract_lead_data(response: str) -> Dict[str, Any]:
+    try:
+        json_start = response.find("```json")
+        json_end = response.find("```", json_start + 6)
+        if json_start != -1 and json_end != -1:
+            json_str = response[json_start + 7:json_end].strip()
+            return json.loads(json_str)
+    except Exception as e:
+        st.error(f"Error parsing JSON: {e}")
+    return {}
 
-# Header
-st.title("🎯 Lead Generation AI ")
-st.markdown("""Generate detailed, relevant leads with AI-powered search and verification.  
-*Powered by Groq's advanced language models*""")
+def update_lead_info(lead_data: Dict[str, Any]):
+    if not lead_data:
+        return
+    lead_data['timestamp'] = datetime.now().isoformat()
+    if lead_data.get('email'):
+        for i, lead in enumerate(st.session_state.leads):
+            if lead.get('email') == lead_data.get('email'):
+                st.session_state.leads[i].update(lead_data)
+                return
+    st.session_state.leads.append(lead_data)
 
-# Main lead generation section
-st.header("🔍 Find Potential Leads")
-query = st.text_input("What kind of leads are you looking for?", placeholder="e.g., 'Find tech startup founders in London with successful exits'")
+def save_leads_to_csv():
+    if st.session_state.leads:
+        df = pd.DataFrame(st.session_state.leads)
+        df.to_csv('leads.csv', index=False)
+        return True
+    return False
 
-col1, col2 = st.columns([2,1])
-with col1:
-    if st.button("🚀 Generate Leads", type="primary") and query:
-        with st.spinner("🔄 Searching for leads..."):
-            leads = get_leads(query)
-        
-        if "error" in leads[0]:
-            st.error(leads[0]["error"])
+# UI
+st.title("Lead Generation AI Assistant 💼")
+
+with st.sidebar:
+    st.header("Configuration")
+    api_key_input = st.text_input("Enter Groq API Key", st.session_state.GROQ_API_KEY, type="password")
+    if st.button("Save API Key"):
+        st.session_state.GROQ_API_KEY = api_key_input
+        st.success("API Key saved!")
+    st.markdown("---")
+    st.header("Lead Analytics")
+    hot_leads = sum(1 for lead in st.session_state.leads if lead.get('lead_quality') == 'hot')
+    warm_leads = sum(1 for lead in st.session_state.leads if lead.get('lead_quality') == 'warm')
+    cold_leads = sum(1 for lead in st.session_state.leads if lead.get('lead_quality') == 'cold')
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Hot Leads", hot_leads)
+    col2.metric("Warm Leads", warm_leads)
+    col3.metric("Cold Leads", cold_leads)
+    if st.button("Export Leads"):
+        if save_leads_to_csv():
+            st.success("Leads exported to leads.csv")
+            st.download_button(
+                label="Download CSV",
+                data=pd.DataFrame(st.session_state.leads).to_csv(index=False),
+                file_name="leads.csv",
+                mime="text/csv"
+            )
         else:
-            st.markdown("### 📋 Generated Leads")
-            st.markdown(leads[0]["result"])
+            st.warning("No leads to export")
 
-with col2:
-    st.markdown("### 💡 Tips")
-    st.markdown("""
-    - Be specific about industry and location
-    - Mention company size or stage
-    - Include specific roles or titles
-    - Add any special criteria
-    """)
+# Persona intro message
+persona_prefix = {
+    "role": "system",
+    "content": (
+        "You are a professional marketing assistant specialized in lead generation. "
+        "Provide actionable, structured lead data, contact strategies, and outreach plans. "
+        "All responses must be related to lead generation, target audience analysis, or marketing."
+    )
+}
 
-# Separator
-st.markdown("---")
+# Chat start
+if not st.session_state.messages:
+    st.session_state.messages.append(persona_prefix)
+    st.session_state.messages.append({"role": "assistant", "content": "Hello! I'm your Marketing Lead Assistant. How can I help today?"})
 
-# Chat section
-st.header("💬 Lead Generation Assistant")
-st.markdown("Get expert advice on lead generation, marketing strategies, and business development. Ask about specific leads, outreach tactics, or market insights.")
+# Display past messages
+for message in st.session_state.messages[1:]:
+    with st.chat_message(message["role"]):
+        content = message["content"]
+        if message["role"] == "assistant":
+            json_start = content.find("```json")
+            if json_start != -1:
+                content = content[:json_start]
+        st.markdown(content)
 
-user_message = st.text_area(
-    "Your question:", 
-    placeholder="e.g., 'How can I effectively reach out to the tech founders we found?' or 'Create an email template for the financial leads'"
-)
-
-col3, col4 = st.columns([2,1])
-with col3:
-    if st.button("💭 Get Expert Advice", type="secondary") and user_message:
-        with st.spinner("🤔 Analyzing your question..."):
-            chat_response = call_groq_chat_completion(user_message)
-        
-        if "error" in chat_response:
-            st.error(chat_response["error"])
-        else:
-            st.markdown("### 🎯 Expert Guidance")
-            st.markdown(chat_response.get("content", "No response generated."))
-
-with col4:
-    st.markdown("### 💡 Suggested Topics")
-    st.markdown("""
-    - Lead qualification strategies
-    - Email templates & outreach
-    - Market research insights
-    - Sales conversion tactics
-    - Follow-up strategies
-    """)
+# Prompt input
+if prompt := st.chat_input("Ask for leads, outreach strategy, etc..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    client = get_groq_client(st.session_state.GROQ_API_KEY.strip())
+    if client:
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                response = get_groq_response(client, st.session_state.messages)
+                st.session_state.messages.append({"role": "assistant", "content": response})
+                lead_data = extract_lead_data(response)
+                update_lead_info(lead_data)
+                display_response = response.split("```json")[0]
+                st.markdown(display_response)
+    else:
+        st.error("Please enter a valid Groq API key in the sidebar.")
