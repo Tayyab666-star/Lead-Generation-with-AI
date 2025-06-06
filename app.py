@@ -78,7 +78,8 @@ st.title("Lead Generation AI Assistant 💼")
 
 with st.sidebar:
     st.header("Configuration")
-    api_key_input = st.text_input("Enter Groq API Key", st.session_state.GROQ_API_KEY, type="password")
+    api_key_input = st.text_input("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
+", st.session_state.GROQ_API_KEY, type="password")
     if st.button("Save API Key"):
         st.session_state.GROQ_API_KEY = api_key_input
         st.success("API Key saved!")
