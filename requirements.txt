@@ -1,5 +1,3 @@
-fastapi
-uvicorn
-requests
 streamlit
-python-dotenv
+groq
+pandas
